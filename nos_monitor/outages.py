@@ -86,13 +86,18 @@ def build_lookups(mms: MmsFile, now: datetime):
         oid = r.get("OUTAGEID", "")
         if not oid:
             continue
-        consets.setdefault(oid, []).append(
-            {
-                "id": _get(r, "GENCONSETID", "CONSTRAINTSETID"),
-                "start_interval": iso(parse_nem(r.get("STARTINTERVAL"))),
-                "end_interval": iso(parse_nem(r.get("ENDINTERVAL"))),
-            }
-        )
+        entry = {
+            "id": _get(r, "GENCONSETID", "CONSTRAINTSETID"),
+            "start_interval": iso(parse_nem(r.get("STARTINTERVAL"))),
+            "end_interval": iso(parse_nem(r.get("ENDINTERVAL"))),
+        }
+        # Extra fields some sources carry (NEOpoint: set description, per-set actual_* of unconfirmed meaning).
+        if r.get("DESCRIPTION"):
+            entry["description"] = r["DESCRIPTION"]
+        if r.get("ACTUAL_STARTTIME") or r.get("ACTUAL_ENDTIME"):
+            entry["source_actual_start"] = iso(parse_nem(r.get("ACTUAL_STARTTIME")))
+            entry["source_actual_end"] = iso(parse_nem(r.get("ACTUAL_ENDTIME")))
+        consets.setdefault(oid, []).append(entry)
     return status, substations, equipment, consets
 
 

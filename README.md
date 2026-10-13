@@ -65,6 +65,8 @@ python -m unittest discover -s tests -v
 | Reading `NETWORK_OUTAGECONSTRAINTSET` and joining it to outages | **No** | Synthetic MMS CSV |
 | DispatchIS market observations | **No** | Synthetic MMS CSV |
 | Failure handling (URL, HTTP status, stage recorded; last good data kept) | **Yes, against the real failure** | Live run below, plus unit tests |
+| NEOpoint NOS report: outage, status, times, substation, equipment, constraint set fields | **Yes, one real NEOpoint export** (NSW1, 2026-10-12) | `tests/test_neopoint_nos.py`; see "NEOpoint data source" |
+| NEOpoint live fetch, other NEOpoint feeds | **No** | Proxy refuses neopoint.com.au; no samples for the other feeds |
 
 Live attempt from the development environment on 2026-10-13:
 
@@ -84,47 +86,65 @@ To complete verification on a machine that can reach NEMweb:
 2. Run `python -m unittest discover -s tests`. `RealFileTests` validates every zip in `tests/fixtures/real/` (it is skipped while that folder is empty).
 3. If validation reports missing columns, adjust the column names in `nos_monitor/outages.py` and `nos_monitor/validate.py`.
 
-## NEOpoint data source (in progress)
+## NEOpoint data source
 
-The page will also take data from NEOpoint, which needs an API key. Status on 2026-10-13: **only the key handling and the inspection tooling exist. No NEOpoint field mapping has been written yet**, because:
+The page can take outages from NEOpoint instead of NEMweb (`serve --source neopoint`). NEOpoint needs an API key.
 
-- no real NEOpoint response has been seen yet: the redacted links and CSV samples have not been provided, and the column names will not be guessed;
-- the development environment's proxy also refuses `CONNECT neopoint.com.au:443` (HTTP 403).
+### Status (2026-10-13)
 
-Setup:
+| Feed | NEOpoint report | Status |
+|---|---|---|
+| Outages | 106 Flows and Constraints\NOS Planned Outages by Region | **Mapped and verified against one real export** (NSW1, `from=2026-10-12`, Daily): `tests/fixtures/neopoint/` |
+| Constraints | Constraints and sets | Not available: no real sample or link yet, so no mapping. Dispatch interval / marginal value / violation degree unconfirmed |
+| Interconnectors | Interconnectors | Not available: no real sample or link yet |
+| DUID prices | Local Price by DUID (GULLRWF1, GULLRWF2) | Not available: no real sample or link yet |
+| Region prices | Local Price by Region (NSW1, QLD1, VIC1) | Not available: no real sample or link yet |
+
+Live fetching from NEOpoint has **not** been verified: the development environment's proxy refuses `CONNECT neopoint.com.au:443` (HTTP 403). The verified sample was a CSV downloaded by the user.
+
+### What the real NOS export contains
+
+Columns (exact; the converter fails loudly if any is renamed or dropped):
+
+`actual_starttime, actual_endtime, outageid, REGIONID, ownerid, substationid, substation_DESCRIPTION, equipmenttype, equipmentid, equipment_DESCRIPTION, genconsetid, setDESCRIPTION, proposes_start_time, proposes_end_time, submitteddate, outagestatuscode, outage_status_DESCRIPTION, recall_minutes_day, recall_minutes_night, companyrefcode`
+
+Findings from the sample:
+
+- **Shape**: one row per outage × substation × equipment × constraint set. 51 rows → 22 outages, 24 distinct constraint sets. Exact duplicate rows occur and are dropped.
+- **Status**: code and description are both included. Only `PTP` (Permission to Proceed) and `COMPLETE` (Completed) appeared.
+- **Times**:
+  - `proposes_start_time` / `proposes_end_time` are used as the outage's start and end.
+  - `actual_starttime` / `actual_endtime` differ between constraint-set rows of one outage (998519: 06:30 vs 06:51 for `I-QN_500`), and for 1004313 they lie months outside the proposed window. So they are shown per constraint set, marked "meaning unconfirmed", and **not** used as outage actual times.
+  - Time zone is not stated; times are treated as NEM time (AEMO convention).
+- **Data window**: the export held outages whose `actual_*` window overlaps the requested day. Nothing started after 10-12 14:20, so upcoming outages need a later `from` date. Whether NEOpoint returns future days for this report is not yet verified.
+- **Short-notice / unplanned outages**: there is no planned/unplanned column. 7 outages were submitted after they started (e.g. 1006835: submitted 15:17, started 14:20), so short-notice entries are included, but completeness for unplanned outages cannot be confirmed.
+- **Not provided** (shown on the page as "Not provided by source"): reason, secondary flag, last changed, resubmission, outage actual times, voltage (only inside description text), constraint-set intervals, planned/unplanned type.
+- **Status/time mismatch**: 1006835 is `COMPLETE` with a planned end of 10-16. It is tagged "Status/time mismatch" and not interpreted.
+- **Update time**: the report has no publish time. The page shows "Latest submitteddate" as the source data time, plus the local fetch time. The update frequency has not been observed.
+
+### Setup and commands
 
 1. `cp .env.example .env` (`.env` is git-ignored).
 2. Set `NEOPOINT_API_KEY`.
-3. Paste each report link into its `NEOPOINT_URL_*` variable, replacing the key value in the link with `{key}`. Per-region reports such as NOS (`instances=NSW1`) can use `instances={instances}` with `NEOPOINT_INSTANCES_<FEED>=NSW1,QLD1,...`; one request is made per region.
+3. Set each `NEOPOINT_URL_*` to the report link, with the key value replaced by `{key}`.
+
+`.env.example` already holds the NOS link: `instances={instances}` with `NEOPOINT_INSTANCES_NOS_OUTAGES=NSW1,QLD1,VIC1,SA1,TAS1`, one request per region. A refresh stores data only if **every** region succeeds, because partial data would show as false "Removed" changes. Identical data is not stored twice.
 
 Rules for the key:
 
 - It is read only by the Python backend and is never sent to the browser.
 - It is scrubbed from every URL, error and log line (`nos_monitor/neopoint.py:redact`).
-- Raw responses saved by `--save` contain no key.
-
-| Feed | Variable | NEOpoint report | Field mapping |
-|---|---|---|---|
-| Outages | `NEOPOINT_URL_NOS_OUTAGES` | NOS Planned Outages by Region | Link structure known (see `.env.example`); columns not yet seen |
-| Constraints | `NEOPOINT_URL_CONSTRAINTS` | Constraints and sets | Not yet: awaiting real sample |
-| Interconnectors | `NEOPOINT_URL_INTERCONNECTORS` | Interconnectors | Not yet: awaiting real sample |
-| DUID prices | `NEOPOINT_URL_PRICE_DUID` | Local Price by DUID (GULLRWF1, GULLRWF2) | Not yet: awaiting real sample |
-| Region prices | `NEOPOINT_URL_PRICE_REGION` | Local Price by Region (NSW1, QLD1, VIC1) | Not yet: awaiting real sample |
 
 ```bash
-python -m nos_monitor neopoint-status                                  # which feeds are configured (no key printed)
-python -m nos_monitor neopoint-inspect --feed nos_outages --save tests/fixtures/neopoint   # live: real columns, rows, time range
-python -m nos_monitor neopoint-inspect --file sample.csv               # inspect a CSV you already have
+python -m nos_monitor serve --source neopoint                        # live NEOpoint NOS (needs network access to neopoint.com.au)
+python -m nos_monitor import-neopoint nsw.csv qld.csv vic.csv        # import saved CSVs as one snapshot
+python -m nos_monitor serve --no-fetch                               # view imported data
+python -m nos_monitor neopoint-status                                # which feeds are configured (no key printed)
+python -m nos_monitor neopoint-inspect --feed nos_outages --instance NSW1 --save tests/fixtures/neopoint
+python -m nos_monitor neopoint-inspect --file sample.csv             # real columns, rows, time range of a CSV
 ```
 
-Questions to be answered from the real samples before any mapping is written:
-
-- whether the NOS report includes short-notice/unplanned outages;
-- which status, start/end, substation, equipment and constraint set columns exist;
-- whether dispatch interval, marginal value and violation degree are available in "Constraints and sets";
-- each report's time range and update time.
-
-Any field that is missing will be shown on the page as missing. Synthetic data will not be used in its place.
+Stale rules for NEOpoint data: no successful NEOpoint check for 30 minutes, the latest check failed, or the data came from a manual import.
 
 ## Data sources
 
@@ -264,7 +284,8 @@ nos_monitor/
   nemweb.py     directory listing parsing, dynamic latest-file selection, download, FetchError (URL/status/stage)
   validate.py   field-level validation of outage/status/constraint-set data
   ga_import.py  Geoscience Australia candidate suggestions + applying human-confirmed rows
-  neopoint.py   NEOpoint: .env loading, server-side fetch, key redaction, CSV inspection (no field mapping yet)
+  neopoint.py   NEOpoint: .env loading, server-side fetch, key redaction, CSV inspection
+  neopoint_nos.py  NEOpoint "NOS Planned Outages by Region" CSV -> NETWORK_* shapes (verified columns)
   outages.py    NETWORK_* tables -> outage records; page categories and "needs attention" rules
   diff.py       consecutive snapshot comparison
   market.py     DispatchIS summary and market observations (non-causal)
@@ -281,7 +302,7 @@ tests/          unittest; tests/fixtures/real/ holds real AEMO files (currently 
 
 ## Known limitations
 
-- Nothing has been verified against a real AEMO file yet; see "Verification status" above.
+- Nothing has been verified against a real AEMO file yet. Only the NEOpoint NOS report has been checked, against one real export. See "Verification status" above.
 - Directory listing parsing follows the common NEMweb (IIS) listing format. The test fixture `tests/fixtures/network_listing.html` was hand-written in that format, not copied from the real page.
 - The coordinate tables are empty, so with real data every outage shows "Location unmapped" for now.
 - Interconnector impact is shown in only two ways: the hand-maintained terminal substation mapping, and region adjacency. The tool never infers causality from constraint names or price moves.

@@ -163,14 +163,26 @@
     else { badge.className = "badge ok"; badge.textContent = "OK"; }
 
     const file = $("#st-file");
-    file.replaceChildren(s ? (s.url ? el("a", { href: s.url, target: "_blank", rel: "noopener" }, s.file) : s.file) : "—");
-    $("#st-upstream").textContent = s ? `${fmt(s.upstream_time, true)} ${ageText(s.upstream_time)}` : "—";
-    $("#st-upstream").title = s ? `File name time: ${s.name_time || "—"}\nDirectory listing time: ${s.listing_time || "—"}\nCSV report time: ${s.report_time || "—"}` : "";
+    file.replaceChildren(s ? (s.url && s.kind === "nemweb" ? el("a", { href: s.url, target: "_blank", rel: "noopener" }, s.file) : s.file) : "—");
+    const info = s && s.info;
+    if (!renderStatus.aemoNote) renderStatus.aemoNote = $("#st-note").textContent;
+    $("#st-note").textContent = info && info.provider === "NEOpoint"
+      ? "NEOpoint gives no publish time for this report and its update frequency has not been observed yet. \"Auto check\" is only how often this page asks NEOpoint; unchanged data is not stored twice. All times are shown as NEM time (AEST, UTC+10); NEOpoint does not state a time zone."
+      : renderStatus.aemoNote;
+    if (info && info.provider === "NEOpoint") {
+      $("#st-upstream-label").textContent = "Source data time";
+      $("#st-upstream").textContent = `Latest submitteddate ${fmt(info.latest_submitted, true)} ${ageText(info.latest_submitted)}`;
+      $("#st-upstream").title = "NEOpoint gives no publish time for this report; the newest submission date in the data is shown instead.";
+    } else {
+      $("#st-upstream-label").textContent = "Upstream file published";
+      $("#st-upstream").textContent = s ? `${fmt(s.upstream_time, true)} ${ageText(s.upstream_time)}` : "—";
+      $("#st-upstream").title = s ? `File name time: ${s.name_time || "—"}\nDirectory listing time: ${s.listing_time || "—"}\nCSV report time: ${s.report_time || "—"}` : "";
+    }
     $("#st-fetched").textContent = s ? `${fmt(s.fetched_at, true)} ${ageText(s.fetched_at)}` : "—";
     const lc = d.last_check, ok = d.last_success_check;
     $("#st-check").textContent = lc ? `${fmt(lc.at)} ${lc.ok ? "OK" : "failed"}${!lc.ok && ok ? `; last OK ${fmt(ok.at)}` : ""}` : (d.config.auto_fetch ? "Not checked yet" : "Offline mode (no automatic fetch)");
     const m = d.market;
-    $("#st-market").textContent = m ? `${m.source_file} · interval ${fmt(m.settlement_date && m.settlement_date.replace(/\//g, "-").replace(" ", "T"))}${m.stale ? " · stale" : ""}` : "None · market observation cannot be confirmed";
+    $("#st-market").textContent = m ? `${m.source_file} · interval ${fmt(m.settlement_date && m.settlement_date.replace(/\//g, "-").replace(" ", "T"))}${m.stale ? " · stale" : ""}` : (s && s.info && s.info.provider === "NEOpoint" ? "Not available · NEOpoint constraint/interconnector/price feeds not mapped yet" : "None · market observation cannot be confirmed");
 
     const err = $("#st-error");
     err.hidden = !d.last_error;
@@ -211,6 +223,12 @@
     return `${e.equipment_type_label || e.equipment_type} ${e.equipment_id}${more}`;
   }
 
+  // Fields the current source does not carry (e.g. NEOpoint NOS report), keyed as in source.info.not_provided.
+  const notProvided = () => (state.data && state.data.source && state.data.source.info && state.data.source.info.not_provided) || {};
+  const NP = "Not provided by source";
+  const orNP = (key, value) => (key in notProvided() ? el("span", { class: "muted" }, NP) : value);
+  const statusMismatch = (o) => o.phase === "active" && /COMPLET/i.test(o.status_code + " " + o.status_desc);
+
   function tags(o) {
     const t = [];
     if (o.attention) t.push(el("span", { class: "tag attention", title: o.attention_reasons.join(", ") }, "Attention"));
@@ -218,6 +236,7 @@
     if (!o.mapped) t.push(el("span", { class: "tag unmapped" }, "Location unmapped"));
     if (o.is_secondary === "1") t.push(el("span", { class: "tag" }, "secondary"));
     if (o.interconnectors.length) t.push(el("span", { class: "tag" }, o.interconnectors.join(" ")));
+    if (statusMismatch(o)) t.push(el("span", { class: "tag attention", title: "Status says completed but the planned end is still in the future. Shown as reported; not interpreted." }, "Status/time mismatch"));
     return t;
   }
 
@@ -232,6 +251,7 @@
       el("td", null, regionOf(o).join(" ")),
       el("td", { title: o.equipment.map((e) => e.substation_name).filter(Boolean).join("; ") }, o.substations.join(", ") || "—"),
       el("td", { title: o.equipment.map((e) => `${e.equipment_type} ${e.equipment_id} ${e.equipment_desc}`).join("\n") }, equipmentText(o)),
+      el("td", { title: o.status_desc }, o.status_code || "—"),
       el("td", null, fmt(o.actual_start || o.start)),
       el("td", null, fmt(o.actual_end || o.end)),
       el("td", null, o.constraint_sets.length || ""),
@@ -390,11 +410,13 @@
         ["Page category", `${PHASES[o.phase]} (based on ${o.phase_basis === "actual" ? "actual times" : o.phase_basis === "status" ? "status code" : "planned times"})`],
         ["Regions", regionOf(o).join(", ")],
         ["Planned start / end", `${fmt(o.start, true)} → ${fmt(o.end, true)}`],
-        ["Actual start / end", `${fmt(o.actual_start, true)} → ${fmt(o.actual_end, true)}`],
-        ["Reason", o.reason], ["Secondary", o.is_secondary === "1" ? "Yes" : o.is_secondary === "0" ? "No" : o.is_secondary],
-        ["Recall (day/night)", `${o.recall_time_day || "—"} / ${o.recall_time_night || "—"}`],
-        ["Resubmission", [o.resubmit_reason, o.resubmit_outage_id].filter(Boolean).join(" · ")],
-        ["Submitted", fmt(o.submitted, true)], ["Last changed", fmt(o.last_changed, true)], ["Company ref", o.company_ref],
+        ["Actual start / end", orNP("actual_start", `${fmt(o.actual_start, true)} → ${fmt(o.actual_end, true)}`)],
+        ["Reason", orNP("reason", o.reason)],
+        ["Secondary", orNP("is_secondary", o.is_secondary === "1" ? "Yes" : o.is_secondary === "0" ? "No" : o.is_secondary)],
+        ["Recall day / night", `${o.recall_time_day || "—"} / ${o.recall_time_night || "—"}${state.data.source && state.data.source.info ? " (minutes, as reported)" : ""}`],
+        ["Resubmission", orNP("resubmit_reason", [o.resubmit_reason, o.resubmit_outage_id].filter(Boolean).join(" · "))],
+        ["Submitted", fmt(o.submitted, true)], ["Last changed", orNP("last_changed", fmt(o.last_changed, true))], ["Company ref", o.company_ref],
+        ["Planned/unplanned", orNP("outage_type", "—")],
         ["Needs attention", o.attention ? o.attention_reasons.join(", ") : "No"],
       ]),
       el("h3", { style: "margin-top:8px" }, "Equipment"),
@@ -402,16 +424,23 @@
         el("tbody", null, o.equipment.map((e) => el("tr", null,
           el("td", { class: "mono" }, e.substation_id), el("td", null, e.substation_name || "—"), el("td", null, e.region || "—"),
           el("td", null, `${e.equipment_type_label}${e.equipment_type_label !== e.equipment_type ? ` (${e.equipment_type})` : ""}`),
-          el("td", { class: "mono" }, e.equipment_id), el("td", null, e.equipment_desc || "—"), el("td", null, e.voltage ? e.voltage + " kV" : "—"),
+          el("td", { class: "mono" }, e.equipment_id), el("td", null, e.equipment_desc || "—"), el("td", null, e.voltage ? e.voltage + " kV" : orNP("voltage", "—")),
           el("td", null, e.location ? el("span", { title: e.location.source }, `${e.location.lat.toFixed(3)}, ${e.location.lon.toFixed(3)}`) : el("span", { class: "tag unmapped" }, "Location unmapped")),
         )))),
-      el("details", null, el("summary", null, "Raw rows (NETWORK_OUTAGEDETAIL)"), el("pre", { class: "raw" }, JSON.stringify(o.raw, null, 1))),
+      el("details", null, el("summary", null, "Raw source rows"), el("pre", { class: "raw" }, JSON.stringify(o.raw, null, 1))),
     );
 
     const cons = el("div", { class: "card" },
       el("h3", null, "2. Expected constraints"), el("p", { class: "hint" }, "Constraint sets linked to this outage in NETWORK_OUTAGECONSTRAINTSET, i.e. the sets AEMO expects to invoke during the outage."),
-      o.constraint_sets.length ? el("table", null, el("thead", null, el("tr", null, el("th", null, "Constraint set ID"), el("th", null, "Start interval"), el("th", null, "End interval"))),
-        el("tbody", null, o.constraint_sets.map((c) => el("tr", null, el("td", { class: "mono" }, c.id), el("td", null, fmt(c.start_interval, true)), el("td", null, fmt(c.end_interval, true))))))
+      o.constraint_sets.length ? (() => {
+        const srcTimes = o.constraint_sets.some((c) => "source_actual_start" in c);
+        const head = ["Constraint set ID", "Description", ...(srcTimes ? ["Source actual_start*", "Source actual_end*"] : []), "Start interval", "End interval"];
+        return el("div", null, el("table", null, el("thead", null, el("tr", null, head.map((h) => el("th", null, h)))),
+          el("tbody", null, o.constraint_sets.map((c) => el("tr", null, el("td", { class: "mono" }, c.id), el("td", null, c.description || "—"),
+            ...(srcTimes ? [el("td", null, fmt(c.source_actual_start, true)), el("td", null, fmt(c.source_actual_end, true))] : []),
+            el("td", null, orNP("constraint_set_interval", fmt(c.start_interval, true))), el("td", null, orNP("constraint_set_interval", fmt(c.end_interval, true))))))),
+          srcTimes ? el("p", { class: "hint" }, "* NEOpoint's actual_starttime/actual_endtime differ between constraint-set rows of one outage, so they are shown per set. Their exact meaning is unconfirmed; they are not used as outage actual times.") : null);
+      })()
         : el("p", { class: "muted" }, "No constraint set is linked in the data."),
       el("p", { class: "hint" }, `Interconnector mapping: ${o.interconnectors.length ? o.interconnectors.join(", ") : "none (substation not in interconnector_substations.csv)"}`),
       el("p", { class: "hint" }, `Interconnectors adjacent to the region (geographic adjacency only, not a confirmed impact): ${o.adjacent_interconnectors.join(", ") || "—"}`),
@@ -419,7 +448,9 @@
 
     const mk = o.market;
     const market = el("div", { class: "card" }, el("h3", null, "3. Market observation (concurrent, not causal)"));
-    if (!mk.available) market.append(el("p", { class: "warn" }, mk.note));
+    if (!mk.available) market.append(el("p", { class: "warn" }, state.data.source && state.data.source.info && state.data.source.info.provider === "NEOpoint"
+      ? "Not available: the NEOpoint Constraints and sets, Interconnectors and Local Price feeds have no confirmed field mapping yet (no real sample), so binding status, flows and prices cannot be shown."
+      : mk.note));
     else {
       market.append(el("p", { class: "hint" }, `Source ${mk.source_file} · dispatch interval ${mk.settlement_date || "—"}`));
       market.append(el("h3", null, "Binding status of linked constraints"));
@@ -489,14 +520,23 @@
     const parts = [];
     if (s) {
       parts.push(el("h3", null, "Current snapshot"), kv([
-        ["Source file", s.url ? el("a", { href: s.url, target: "_blank", rel: "noopener" }, s.file) : s.file],
-        ["Source type", { nemweb: "NEMweb automatic fetch", import: "Manual import", sample: "Synthetic sample" }[s.kind] || s.kind],
+        ["Source file", s.url && s.kind === "nemweb" ? el("a", { href: s.url, target: "_blank", rel: "noopener" }, s.file) : s.file],
+        ["Source type", { nemweb: "NEMweb automatic fetch", neopoint: "NEOpoint automatic fetch", import: "Manual import", sample: "Synthetic sample" }[s.kind] || s.kind],
+        ...(s.info ? [["Provider / report", `${s.info.provider} · ${s.info.report}`], ["Regions in data", (s.info.regions || []).join(", ")],
+          ["Latest submitteddate", fmt(s.info.latest_submitted, true)], ["Source rows (deduplicated)", s.info.rows],
+          ...(s.info.files && s.info.files.length ? [["Imported files", s.info.files.join(", ")]] : []),
+          ...(s.url && s.kind !== "nemweb" ? [["Request URL(s), key redacted", el("span", { class: "mono small" }, s.url)]] : [])] : []),
         ["File name time", fmt(s.name_time, true)], ["Directory listing time", fmt(s.listing_time, true)], ["CSV report time", fmt(s.report_time, true)],
         ["Local fetch time", fmt(s.fetched_at, true)], ["Outages", s.record_count], ["Parse warnings", s.warning_count],
       ]));
       parts.push(el("h3", { style: "margin-top:8px" }, "Tables in file"), el("table", null,
         el("thead", null, el("tr", null, el("th", null, "Table"), el("th", null, "Version"), el("th", null, "Rows"), el("th", null, "Columns"))),
         el("tbody", null, Object.entries(s.tables).map(([n, t]) => el("tr", null, el("td", { class: "mono" }, n), el("td", null, t.version), el("td", null, t.rows), el("td", { class: "small muted" }, t.columns.join(", ")))))));
+      if (s.info && s.info.not_provided) {
+        parts.push(el("h3", { style: "margin-top:8px" }, "Fields not provided by this source"),
+          el("ul", { class: "small" }, Object.values(s.info.not_provided).map((t) => el("li", null, t))));
+        if (s.info.notes) parts.push(el("ul", { class: "small muted" }, s.info.notes.map((t) => el("li", null, t))));
+      }
       const v = s.validation;
       if (v) {
         parts.push(el("h3", { style: "margin-top:8px" }, `Field validation: ${v.ok ? "passed" : "failed"}`),
@@ -512,6 +552,10 @@
       }
       if (s.warnings.length) parts.push(el("details", null, el("summary", null, `Parse warnings (${s.warning_count})`), el("pre", { class: "raw" }, s.warnings.join("\n"))));
     }
+    if (d.feeds) parts.push(el("h3", { style: "margin-top:8px" }, "NEOpoint feeds"), el("table", null,
+      el("thead", null, el("tr", null, ["Feed", "Report", "Configured", "In use", "Status"].map((h) => el("th", null, h)))),
+      el("tbody", null, d.feeds.map((f) => el("tr", null, el("td", { class: "mono" }, f.feed), el("td", null, f.report),
+        el("td", null, f.configured ? "yes" : "no"), el("td", null, f.active ? "yes" : "no"), el("td", { class: "small" }, f.status))))));
     parts.push(el("h3", { style: "margin-top:8px" }, "Constraint set membership (GENCONSET)"),
       el("p", { class: "small" }, d.genconset.sets ? `${d.genconset.sets} constraint sets, source ${d.genconset.source}` : "Not imported. Without this mapping, constraint set binding status is always shown as \"Cannot be confirmed\"."));
     parts.push(el("h3", { style: "margin-top:8px" }, "Coordinate mapping"),

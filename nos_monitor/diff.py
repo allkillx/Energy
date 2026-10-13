@@ -15,7 +15,8 @@ KIND_LABELS = {
 
 
 def _conset_key(c: dict) -> tuple:
-    return (c.get("id"), c.get("start_interval"), c.get("end_interval"))
+    return (c.get("id"), c.get("start_interval"), c.get("end_interval"),
+            c.get("source_actual_start"), c.get("source_actual_end"))
 
 
 def _equipment_key(e: dict) -> tuple:

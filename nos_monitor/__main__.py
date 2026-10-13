@@ -27,7 +27,8 @@ def _monitor(args, **kw) -> Monitor:
 
 
 def cmd_serve(args):
-    m = _monitor(args, enable_network=not args.no_fetch, enable_market=not args.no_market and not args.no_fetch)
+    m = _monitor(args, enable_network=not args.no_fetch, enable_market=not args.no_market and not args.no_fetch,
+                 source=args.source)
     serve(m, args.host, args.port, None if args.no_fetch else args.poll_seconds)
 
 
@@ -201,6 +202,12 @@ def cmd_neopoint_inspect(args):
     print(json.dumps({"source": where, **neopoint.inspect_csv(data)}, indent=2, ensure_ascii=False))
 
 
+def cmd_import_neopoint(args):
+    m = _monitor(args)
+    res = m.import_neopoint_files(args.files)
+    print(json.dumps(res, ensure_ascii=False))
+
+
 def cmd_neopoint_status(args):
     feeds = neopoint.configured_feeds()
     print(json.dumps({"api_key_set": bool(os.environ.get(neopoint.KEY_ENV)), "feeds": feeds}, indent=2))
@@ -244,6 +251,8 @@ def main(argv=None):
     s.add_argument("--poll-seconds", type=float, default=300, help="upstream check interval (default 300)")
     s.add_argument("--no-fetch", action="store_true", help="never contact NEMweb (use imported data)")
     s.add_argument("--no-market", action="store_true", help="skip DispatchIS market observations")
+    s.add_argument("--source", choices=["nemweb", "neopoint"], default="nemweb",
+                   help="outage source: AEMO PUBLIC_NETWORK (default) or NEOpoint NOS report (needs .env)")
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("refresh", help="check NEMweb once and store a new snapshot if available")
@@ -296,6 +305,10 @@ def main(argv=None):
     s.add_argument("review_file")
     s.add_argument("--dataset", required=True, help='source label, e.g. "Geoscience Australia Electricity Transmission Substations (downloaded 2026-10-13)"')
     s.set_defaults(func=cmd_locations_apply)
+
+    s = sub.add_parser("import-neopoint", help="import saved NEOpoint 'NOS Planned Outages by Region' CSV(s) as one snapshot")
+    s.add_argument("files", nargs="+", help="one CSV per region is fine; they are combined")
+    s.set_defaults(func=cmd_import_neopoint)
 
     s = sub.add_parser("neopoint-status", help="show which NEOpoint feeds are configured (never prints the key)")
     s.set_defaults(func=cmd_neopoint_status)

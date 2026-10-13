@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
     tables_json TEXT NOT NULL,          -- {table: {version, rows, columns}}
     warnings_json TEXT NOT NULL,
     records_z BLOB NOT NULL,            -- zlib(JSON list of outage records)
-    validation_json TEXT                -- validate.validate() report
+    validation_json TEXT,               -- validate.validate() report
+    source_info_json TEXT               -- provider-specific facts (e.g. NEOpoint report, regions, missing fields)
 );
 CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +73,7 @@ class Store:
         self._conn.executescript(SCHEMA)
         # columns added after the first release
         self._ensure_column("snapshots", "validation_json", "TEXT")
+        self._ensure_column("snapshots", "source_info_json", "TEXT")
         for col, typ in (("url", "TEXT"), ("http_status", "INTEGER"), ("stage", "TEXT")):
             self._ensure_column("fetch_log", col, typ)
         self._conn.commit()
@@ -100,6 +102,7 @@ class Store:
         snap["tables"] = json.loads(snap.pop("tables_json"))
         snap["warnings"] = json.loads(snap.pop("warnings_json"))
         snap["validation"] = json.loads(snap.pop("validation_json") or "null")
+        snap["source_info"] = json.loads(snap.pop("source_info_json", None) or "null")
         if with_records:
             snap["records"] = json.loads(zlib.decompress(row["records_z"]).decode())
         return snap
@@ -115,13 +118,13 @@ class Store:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 """INSERT INTO snapshots (source_file, source_url, source_kind, name_time, listing_time,
-                   report_time, fetched_at, record_count, tables_json, warnings_json, records_z, validation_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   report_time, fetched_at, record_count, tables_json, warnings_json, records_z, validation_json, source_info_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     meta["source_file"], meta.get("source_url"), meta["source_kind"], meta.get("name_time"),
                     meta.get("listing_time"), meta.get("report_time"), meta["fetched_at"], len(records),
                     json.dumps(meta.get("tables", {})), json.dumps(meta.get("warnings", [])[:200]), blob,
-                    json.dumps(meta.get("validation")),
+                    json.dumps(meta.get("validation")), json.dumps(meta.get("source_info")),
                 ),
             )
             sid = cur.lastrowid

@@ -34,11 +34,11 @@
 <section id="status" class="status-strip" aria-live="polite">
   <div class="stat"><span class="k">Data status</span><span id="st-badge" class="badge">Loading</span></div>
   <div class="stat"><span class="k">Source file</span><span id="st-file" class="v mono">—</span></div>
-  <div class="stat"><span class="k">Upstream file published</span><span id="st-upstream" class="v">—</span></div>
+  <div class="stat"><span class="k" id="st-upstream-label">Upstream file published</span><span id="st-upstream" class="v">—</span></div>
   <div class="stat"><span class="k">Local fetch time</span><span id="st-fetched" class="v">—</span></div>
   <div class="stat"><span class="k">Last check</span><span id="st-check" class="v">—</span></div>
   <div class="stat"><span class="k">Market data (DispatchIS)</span><span id="st-market" class="v">—</span></div>
-  <p class="note small muted">NOS files are published upstream roughly every 30 minutes. "Auto check" is only how often this page checks for a new file; it is not the upstream update frequency. All times are NEM time (AEST, UTC+10).</p>
+  <p class="note small muted" id="st-note">NOS files are published upstream roughly every 30 minutes. "Auto check" is only how often this page checks for a new file; it is not the upstream update frequency. All times are NEM time (AEST, UTC+10).</p>
   <div id="st-error" class="error" hidden></div>
   <div id="st-stale" class="warn" hidden></div>
 </section>
@@ -69,7 +69,7 @@
     <div class="table-wrap">
       <table id="outage-table">
         <thead><tr>
-          <th></th><th>Outage ID</th><th>Region</th><th>Substation</th><th>Equipment</th><th>Start</th><th>End</th><th>Con. sets</th><th>Flags</th>
+          <th></th><th>Outage ID</th><th>Region</th><th>Substation</th><th>Equipment</th><th>Status</th><th>Start</th><th>End</th><th>Con. sets</th><th>Flags</th>
         </tr></thead>
         <tbody></tbody>
       </table>

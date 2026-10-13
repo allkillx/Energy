@@ -9,12 +9,14 @@ Rules:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import threading
 import time
 from datetime import timedelta
 
-from . import mms_csv, nemweb
+from . import mms_csv, nemweb, neopoint, neopoint_nos
 from .diff import diff_snapshots
 from .locations import Locations
 from .market import adjacent_interconnectors, observe_outage, summarise_dispatch
@@ -34,26 +36,31 @@ MARKET_STALE_MINUTES = 15
 MIN_REFRESH_GAP_SECONDS = 60
 KEEP_RAW_FILES = 20
 KEEP_ENDED_DAYS = 2
+NEOPOINT_STALE_MINUTES = 30  # no successful NEOpoint check for this long -> stale (NEOpoint gives no publish time)
 
 
 class Monitor:
     def __init__(self, store: Store, locations: Locations, var_dir: str, *, getter=nemweb.http_get,
                  network_url=nemweb.NETWORK_URL, dispatch_url=nemweb.DISPATCHIS_URL,
-                 enable_network=True, enable_market=True):
+                 enable_network=True, enable_market=True, source="nemweb"):
         self.store, self.locations, self.var_dir = store, locations, var_dir
         self.getter, self.network_url, self.dispatch_url = getter, network_url, dispatch_url
         self.enable_network, self.enable_market = enable_network, enable_market
+        self.source = source  # "nemweb" (AEMO PUBLIC_NETWORK) or "neopoint" (NOS Planned Outages by Region)
         self._lock = threading.Lock()
         self._last_refresh = 0.0
         os.makedirs(os.path.join(var_dir, "raw"), exist_ok=True)
 
     # --- ingest ----------------------------------------------------------
-    def ingest_network(self, mms: mms_csv.MmsFile, meta: dict) -> dict:
+    def ingest_network(self, mms: mms_csv.MmsFile, meta: dict, raw_rows: dict | None = None) -> dict:
         now = now_nem()
         report = validate(mms, now)
         if not report["ok"]:
             raise ValidationError(report)
         records = normalise(mms, now)
+        if raw_rows is not None:  # show the source's own rows (e.g. NEOpoint) rather than the converted ones
+            for rec in records:
+                rec["raw"] = raw_rows.get(rec["outage_id"], rec["raw"])
         prev = self.store.latest_snapshot()
         changes = diff_snapshots(prev["records"], records) if prev else []
         meta = dict(meta)
@@ -75,6 +82,69 @@ class Monitor:
         self.store.log(iso(now_nem()), "network", True, f"imported {name}: {res['records']} outages, {res['changes']} changes", name)
         return res
 
+    def ingest_neopoint_rows(self, rows: list[dict], kind: str, urls: list[str] | None = None,
+                             files: list[str] | None = None) -> dict:
+        """Store NEOpoint NOS rows as a snapshot. Identical content is not stored twice."""
+        digest = hashlib.sha256(json.dumps(sorted(json.dumps(r, sort_keys=True) for r in rows)).encode()).hexdigest()[:12]
+        regions = sorted({r["REGIONID"] for r in rows if r["REGIONID"]})
+        source_file = f"NEOpoint NOS Planned Outages by Region [{','.join(regions)}] #{digest}"
+        if self.store.has_source(source_file):
+            return {"new": False, "file": source_file}
+        info = {
+            "provider": "NEOpoint", "report": neopoint_nos.REPORT, "regions": regions,
+            "latest_submitted": iso(parse_nem(neopoint_nos.latest_submitted(rows))),
+            "rows": len(rows), "files": files or [], "not_provided": neopoint_nos.NOT_PROVIDED,
+            "notes": ["actual_starttime/actual_endtime are per constraint-set row and are shown on the constraint "
+                      "set, not as outage actual times (meaning unconfirmed).",
+                      "No planned/unplanned field: short-notice outages appear, completeness is unknown.",
+                      "Times assumed to be NEM time (AEMO convention); NEOpoint does not state a time zone."],
+        }
+        res = self.ingest_network(neopoint_nos.to_mms(rows), {
+            "source_file": source_file, "source_url": " | ".join(urls) if urls else None, "source_kind": kind,
+            "source_info": info,
+        }, raw_rows=neopoint_nos.raw_by_outage(rows))
+        return {"new": True, "file": source_file, **res}
+
+    def import_neopoint_files(self, paths: list[str]) -> dict:
+        rows = []
+        for path in paths:
+            with open(path, "rb") as fh:
+                rows += neopoint_nos.read_rows(fh.read())
+        names = [os.path.basename(p) for p in paths]
+        res = self.ingest_neopoint_rows(rows, "import", files=names)
+        msg = (f"imported NEOpoint {', '.join(names)}: {res['records']} outages, {res['changes']} changes"
+               if res["new"] else f"NEOpoint import identical to a stored snapshot: {', '.join(names)}")
+        self.store.log(iso(now_nem()), "network", True, msg, res["file"])
+        return res
+
+    def _refresh_neopoint(self) -> dict:
+        """Fetch every configured region of the NOS report; ingest only if all of them succeed."""
+        at = iso(now_nem())
+        try:
+            regions = neopoint.instances("nos_outages")
+            if not regions:
+                raise nemweb.FetchError("config", "<NEOPOINT_INSTANCES_NOS_OUTAGES>", "no regions configured")
+            rows, urls = [], []
+            for region in regions:
+                data, url = neopoint.fetch("nos_outages", region)
+                try:
+                    rows += neopoint_nos.read_rows(data)
+                except neopoint_nos.NeopointFormatError as exc:
+                    self._save_raw(f"neopoint_nos_{region or 'all'}.csv", data, rejected=True)
+                    raise nemweb.FetchError("parse", url, str(exc)) from None
+                urls.append(url)
+            res = self.ingest_neopoint_rows(rows, "neopoint", urls=urls)
+            msg = (f"fetched NEOpoint NOS ({', '.join(r or 'all' for r in regions)}): {res['records']} outages, "
+                   f"{res['changes']} changes" if res["new"] else "NEOpoint NOS unchanged since last snapshot")
+            self.store.log(at, "network", True, msg, res["file"], url=urls[0] if urls else None)
+            return {"ok": True, **res}
+        except nemweb.FetchError as exc:
+            self.store.log(at, "network", False, neopoint.redact(str(exc)), url=exc.url, http_status=exc.status, stage=exc.stage)
+            return {"ok": False, "error": neopoint.redact(str(exc)), **exc.as_dict()}
+        except ValidationError as exc:
+            self.store.log(at, "network", False, str(exc), stage="validate")
+            return {"ok": False, "error": str(exc), "stage": "validate"}
+
     def import_dispatch_file(self, path: str, kind: str = "import") -> dict:
         mms = mms_csv.parse_file(path)
         name = os.path.basename(path)
@@ -93,9 +163,11 @@ class Monitor:
                 return {"skipped": f"last check was less than {MIN_REFRESH_GAP_SECONDS}s ago"}
             self._last_refresh = time.monotonic()
             out = {}
-            if self.enable_network:
+            if self.enable_network and self.source == "neopoint":
+                out["network"] = self._refresh_neopoint()
+            elif self.enable_network:
                 out["network"] = self._refresh_feed("network", self.network_url, "PUBLIC_NETWORK_", self._ingest_network_bytes)
-            if self.enable_market:
+            if self.enable_market and self.source == "nemweb":
                 out["dispatch"] = self._refresh_feed("dispatch", self.dispatch_url, "PUBLIC_DISPATCHIS_", self._ingest_dispatch_bytes)
             return out
         finally:
@@ -152,6 +224,19 @@ class Monitor:
             os.remove(f)
 
     # --- state for the page ----------------------------------------------
+    def _feed_status(self) -> list[dict]:
+        """Per-feed status for the page. Only the NOS feed has a confirmed field mapping so far."""
+        out = []
+        for feed, info in neopoint.configured_feeds().items():
+            implemented = feed == "nos_outages"
+            out.append({
+                "feed": feed, "report": info["report"], "provider": "NEOpoint", "configured": info["configured"],
+                "active": implemented and self.source == "neopoint" and self.enable_network,
+                "status": ("mapped (columns verified against a real NEOpoint export)" if implemented
+                           else "not available: no real NEOpoint sample yet, so no field mapping"),
+            })
+        return out
+
     def state(self) -> dict:
         now = now_nem()
         snap = self.store.latest_snapshot()
@@ -184,6 +269,7 @@ class Monitor:
         upstream_time = snap and (snap.get("name_time") or snap.get("listing_time") or snap.get("report_time"))
         upstream_age = age_min(upstream_time) if snap else None
         last_failed = bool(net_last and not net_last["ok"])
+        info = (snap or {}).get("source_info") or {}
         stale_reasons = []
         if not snap:
             stale_reasons.append("No successful data yet")
@@ -192,7 +278,11 @@ class Monitor:
                 stale_reasons.append(f"Upstream file is {upstream_age:.0f} min old (threshold {UPSTREAM_STALE_MINUTES} min)")
             if last_failed:
                 stale_reasons.append("The latest fetch failed; showing the last successful data")
-            if snap["source_kind"] != "nemweb":
+            if snap["source_kind"] == "neopoint":
+                ok_age = age_min(net_ok["at"]) if net_ok else None
+                if ok_age is not None and ok_age > NEOPOINT_STALE_MINUTES:
+                    stale_reasons.append(f"No successful NEOpoint check for {ok_age:.0f} min (threshold {NEOPOINT_STALE_MINUTES} min)")
+            elif snap["source_kind"] != "nemweb":
                 stale_reasons.append("Data comes from a manual import or sample, not automatic fetching")
 
         market_meta = None
@@ -217,7 +307,9 @@ class Monitor:
                 "warning_count": len(snap["warnings"]), "warnings": snap["warnings"][:20],
                 "snapshot_id": snap["id"], "record_count": snap["record_count"],
                 "validation": snap.get("validation"),
+                "info": info or None,
             },
+            "feeds": self._feed_status(),
             "stale": bool(stale_reasons), "stale_reasons": stale_reasons,
             "last_check": net_last, "last_success_check": net_ok,
             "last_error": net_last["message"] if last_failed else None,
