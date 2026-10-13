@@ -63,8 +63,33 @@ class ListingTests(unittest.TestCase):
         self.assertEqual(latest.size, 48555)
 
     def test_no_match_raises(self):
-        with self.assertRaises(LookupError):
+        with self.assertRaises(nemweb.FetchError) as ctx:
             nemweb.find_latest("https://x/", "PUBLIC_NETWORK_", getter=lambda url: b"<html></html>")
+        self.assertEqual(ctx.exception.stage, "listing")
+        self.assertEqual(ctx.exception.url, "https://x/")
+
+    def test_http_errors_keep_url_status_and_stage(self):
+        import urllib.error
+        from unittest import mock
+
+        def boom(*a, **k):
+            raise urllib.error.URLError("Tunnel connection failed: 403 Forbidden")
+
+        with mock.patch("urllib.request.urlopen", boom):
+            with self.assertRaises(nemweb.FetchError) as ctx:
+                nemweb.find_latest(nemweb.NETWORK_URL, "PUBLIC_NETWORK_")
+        e = ctx.exception
+        self.assertEqual((e.stage, e.url, e.status, e.via_proxy), ("listing", nemweb.NETWORK_URL, 403, True))
+        self.assertIn("HTTP 403 from proxy CONNECT", str(e))
+
+        def not_found(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+
+        entry = nemweb.ListingEntry("PUBLIC_NETWORK_202610120900_01.zip", nemweb.NETWORK_URL + "x.zip", None, None)
+        with mock.patch("urllib.request.urlopen", not_found):
+            with self.assertRaises(nemweb.FetchError) as ctx:
+                nemweb.download(entry)
+        self.assertEqual((ctx.exception.stage, ctx.exception.status), ("download", 404))
 
 
 class OutageTests(unittest.TestCase):

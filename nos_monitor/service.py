@@ -18,9 +18,16 @@ from . import mms_csv, nemweb
 from .diff import diff_snapshots
 from .locations import Locations
 from .market import adjacent_interconnectors, observe_outage, summarise_dispatch
-from .outages import T_OUTAGE, annotate, normalise
+from .outages import annotate, normalise
 from .store import Store
 from .timeutil import iso, now_nem, parse_nem
+from .validate import validate
+
+
+class ValidationError(ValueError):
+    def __init__(self, report: dict):
+        super().__init__("file failed validation, keeping last good data: " + "; ".join(report["errors"]))
+        self.report = report
 
 UPSTREAM_STALE_MINUTES = 90  # NOS publishes roughly every 30 min; 3 missed cycles = stale
 MARKET_STALE_MINUTES = 15
@@ -42,12 +49,10 @@ class Monitor:
 
     # --- ingest ----------------------------------------------------------
     def ingest_network(self, mms: mms_csv.MmsFile, meta: dict) -> dict:
-        table = mms.table(T_OUTAGE)
-        if table is None:
-            raise ValueError(f"file has no {T_OUTAGE} table (tables present: {', '.join(sorted(mms.tables)) or 'none'}); keeping last good data")
-        if not table.rows:
-            raise ValueError(f"{T_OUTAGE} is empty; treating file as suspect and keeping last good data")
         now = now_nem()
+        report = validate(mms, now)
+        if not report["ok"]:
+            raise ValidationError(report)
         records = normalise(mms, now)
         prev = self.store.latest_snapshot()
         changes = diff_snapshots(prev["records"], records) if prev else []
@@ -57,6 +62,7 @@ class Monitor:
         meta["tables"] = {n: {"version": t.version, "rows": len(t.rows), "columns": t.columns}
                           for n, t in mms.tables.items()}
         meta["warnings"] = mms.warnings
+        meta["validation"] = report
         sid = self.store.add_snapshot(meta, records, changes, prev["id"] if prev else None)
         return {"snapshot_id": sid, "records": len(records), "changes": len(changes)}
 
@@ -101,16 +107,26 @@ class Monitor:
             entry = nemweb.find_latest(url, prefix, self.getter)
             already = self.store.has_source(entry.name) if feed == "network" else self.store.has_market_source(entry.name)
             if already:
-                self.store.log(at, feed, True, f"no new file; latest is still {entry.name}", entry.name)
+                self.store.log(at, feed, True, f"no new file; latest is still {entry.name}", entry.name, url=entry.url)
                 return {"ok": True, "new": False, "file": entry.name}
-            data = self.getter(entry.url)
-            res = ingest(entry, data)
+            data = nemweb.download(entry, self.getter)
+            try:
+                res = ingest(entry, data)
+            except ValidationError as exc:
+                self._save_raw(entry.name, data, rejected=True)
+                raise nemweb.FetchError("validate", entry.url, str(exc)) from exc
+            except Exception as exc:
+                self._save_raw(entry.name, data, rejected=True)
+                raise nemweb.FetchError("parse", entry.url, f"{type(exc).__name__}: {exc}") from exc
             self._save_raw(entry.name, data)
-            self.store.log(at, feed, True, f"fetched {entry.name}", entry.name)
+            self.store.log(at, feed, True, f"fetched {entry.name}", entry.name, url=entry.url)
             return {"ok": True, "new": True, "file": entry.name, **res}
-        except Exception as exc:  # keep last good data, surface the error
+        except nemweb.FetchError as exc:  # keep last good data, surface the error with URL/status/stage
+            self.store.log(at, feed, False, str(exc), url=exc.url, http_status=exc.status, stage=exc.stage)
+            return {"ok": False, "error": str(exc), **exc.as_dict()}
+        except Exception as exc:
             msg = f"{type(exc).__name__}: {exc}"
-            self.store.log(at, feed, False, msg)
+            self.store.log(at, feed, False, msg, url=url)
             return {"ok": False, "error": msg}
 
     def _ingest_network_bytes(self, entry: nemweb.ListingEntry, data: bytes) -> dict:
@@ -126,9 +142,10 @@ class Monitor:
         self.store.add_market(entry.name, iso(entry.name_time), iso(now_nem()), summary)
         return {"binding": len(summary["binding_constraints"])}
 
-    def _save_raw(self, name: str, data: bytes):
+    def _save_raw(self, name: str, data: bytes, rejected: bool = False):
+        """Keep recent raw zips; rejected files are kept too (prefixed) so they can be inspected."""
         raw = os.path.join(self.var_dir, "raw")
-        with open(os.path.join(raw, name), "wb") as fh:
+        with open(os.path.join(raw, ("REJECTED_" if rejected else "") + name), "wb") as fh:
             fh.write(data)
         files = sorted((os.path.join(raw, f) for f in os.listdir(raw)), key=os.path.getmtime)
         for f in files[:-KEEP_RAW_FILES]:
@@ -199,10 +216,12 @@ class Monitor:
                 "local_age_minutes": age_min(snap["fetched_at"]), "tables": snap["tables"],
                 "warning_count": len(snap["warnings"]), "warnings": snap["warnings"][:20],
                 "snapshot_id": snap["id"], "record_count": snap["record_count"],
+                "validation": snap.get("validation"),
             },
             "stale": bool(stale_reasons), "stale_reasons": stale_reasons,
             "last_check": net_last, "last_success_check": net_ok,
             "last_error": net_last["message"] if last_failed else None,
+            "last_error_info": {k: net_last.get(k) for k in ("at", "url", "http_status", "stage")} if last_failed else None,
             "dispatch_last_check": disp_last,
             "market": market_meta,
             "genconset": {"sets": len(members), "source": self.store.genconset_source()},

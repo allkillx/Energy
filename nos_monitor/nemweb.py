@@ -8,6 +8,7 @@ embedded in the file name, falling back to the listing date.
 from __future__ import annotations
 
 import re
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
@@ -92,16 +93,58 @@ def latest(entries: list[ListingEntry], prefix: str, suffix: str = ".zip") -> Li
     return max(candidates, key=lambda e: e.sort_key) if candidates else None
 
 
-def http_get(url: str, timeout: float = 30.0) -> bytes:
+class FetchError(Exception):
+    """A fetch/parse failure with enough context to diagnose it: URL, HTTP status, stage."""
+
+    def __init__(self, stage: str, url: str, detail: str, status: int | None = None, via_proxy: bool = False):
+        super().__init__(detail)
+        self.stage, self.url, self.detail, self.status, self.via_proxy = stage, url, detail, status, via_proxy
+
+    def __str__(self) -> str:
+        where = f"HTTP {self.status}{' from proxy CONNECT' if self.via_proxy else ''}" if self.status else "no HTTP status"
+        return f"[{self.stage}] {self.url} — {where} — {self.detail}"
+
+    def as_dict(self) -> dict:
+        return {"stage": self.stage, "url": self.url, "http_status": self.status,
+                "via_proxy": self.via_proxy, "detail": self.detail}
+
+
+_TUNNEL_RE = re.compile(r"Tunnel connection failed:\s*(\d{3})")
+
+
+def http_get(url: str, timeout: float = 30.0, stage: str = "download") -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        raise FetchError(stage, url, exc.reason or "HTTP error", status=exc.code) from exc
+    except urllib.error.URLError as exc:
+        reason = str(exc.reason)
+        m = _TUNNEL_RE.search(reason)  # an HTTPS proxy refused the CONNECT (e.g. egress policy)
+        raise FetchError(stage, url, reason, status=int(m.group(1)) if m else None, via_proxy=bool(m)) from exc
+    except (TimeoutError, OSError) as exc:
+        raise FetchError(stage, url, f"{type(exc).__name__}: {exc}") from exc
+
+
+def _get(getter, url: str, stage: str) -> bytes:
+    try:
+        return getter(url)
+    except FetchError as exc:
+        exc.stage = stage
+        raise
+    except Exception as exc:  # custom getters (tests) may raise anything
+        raise FetchError(stage, url, f"{type(exc).__name__}: {exc}") from exc
 
 
 def find_latest(base_url: str, prefix: str, getter=http_get) -> ListingEntry:
-    html = getter(base_url).decode("utf-8", errors="replace")
+    html = _get(getter, base_url, "listing").decode("utf-8", errors="replace")
     entries = parse_listing(html, base_url)
     entry = latest(entries, prefix)
     if entry is None:
-        raise LookupError(f"no {prefix}*.zip found in listing {base_url} ({len(entries)} entries)")
+        raise FetchError("listing", base_url, f"no {prefix}*.zip found in listing ({len(entries)} entries parsed)")
     return entry
+
+
+def download(entry: ListingEntry, getter=http_get) -> bytes:
+    return _get(getter, entry.url, "download")

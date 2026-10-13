@@ -86,7 +86,7 @@
     if (r.skipped) return toast("Skipped: " + r.skipped);
     const n = r.network;
     if (!n) return toast("Offline mode: upstream is not contacted.");
-    if (!n.ok) toast("Fetch failed, keeping last good data: " + n.error);
+    if (!n.ok) toast((state.data.source ? "Fetch failed, keeping last good data: " : "Fetch failed, no data yet: ") + n.error);
     else if (n.new) toast(`Fetched new file ${n.file}: ${n.records} outages, ${n.changes} changes`);
     else toast("No new upstream file (latest: " + n.file + ")");
   }
@@ -174,7 +174,15 @@
 
     const err = $("#st-error");
     err.hidden = !d.last_error;
-    err.textContent = d.last_error ? "Latest fetch error: " + d.last_error : "";
+    const ei = d.last_error_info;
+    err.replaceChildren(...(d.last_error ? [
+      el("strong", null, "Latest fetch failed"), ei ? ` at ${fmt(ei.at, true)}` : "", el("br"),
+      ei && ei.url ? el("span", null, "URL: ", el("span", { class: "mono" }, ei.url), el("br")) : "",
+      ei ? `Stage: ${ei.stage || "—"} · HTTP status: ${ei.http_status || "none"}` : "", el("br"),
+      el("span", { class: "small" }, d.last_error),
+      s ? el("div", { class: "small" }, `Showing the last successful data (${s.file}), not live data.`)
+        : el("div", { class: "small" }, "No successful data yet. Nothing is shown rather than demo data."),
+    ] : []));
     const st = $("#st-stale");
     st.hidden = !d.stale_reasons.length;
     st.textContent = d.stale_reasons.join("; ");
@@ -489,6 +497,19 @@
       parts.push(el("h3", { style: "margin-top:8px" }, "Tables in file"), el("table", null,
         el("thead", null, el("tr", null, el("th", null, "Table"), el("th", null, "Version"), el("th", null, "Rows"), el("th", null, "Columns"))),
         el("tbody", null, Object.entries(s.tables).map(([n, t]) => el("tr", null, el("td", { class: "mono" }, n), el("td", null, t.version), el("td", null, t.rows), el("td", { class: "small muted" }, t.columns.join(", ")))))));
+      const v = s.validation;
+      if (v) {
+        parts.push(el("h3", { style: "margin-top:8px" }, `Field validation: ${v.ok ? "passed" : "failed"}`),
+          kv([["Outage rows / IDs", `${v.stats.outage_rows ?? "—"} / ${v.stats.outage_ids ?? "—"}`],
+            ["Status codes used", (v.stats.status_codes_used || []).join(", ") || "—"],
+            ["Codes without description", (v.stats.status_codes_without_description || []).join(", ") || "none"],
+            ["Constraint set rows / distinct", `${v.stats.constraint_set_rows ?? 0} / ${v.stats.constraint_sets_distinct ?? 0}`],
+            ["Outages with constraint sets", v.stats.records_with_constraint_sets ?? "—"],
+            ["Substations without region", (v.stats.substations_without_region || []).length]]));
+        if (v.errors.length || v.warnings.length)
+          parts.push(el("details", null, el("summary", null, `Validation messages (${v.errors.length + v.warnings.length})`),
+            el("pre", { class: "raw" }, [...v.errors.map((e) => "error: " + e), ...v.warnings.map((w) => "warning: " + w)].join("\n"))));
+      }
       if (s.warnings.length) parts.push(el("details", null, el("summary", null, `Parse warnings (${s.warning_count})`), el("pre", { class: "raw" }, s.warnings.join("\n"))));
     }
     parts.push(el("h3", { style: "margin-top:8px" }, "Constraint set membership (GENCONSET)"),
@@ -497,8 +518,8 @@
       el("p", { class: "small" }, `Substations ${d.locations.substations}, lines ${d.locations.lines}, interconnector substations ${d.locations.interconnector_substations}. Only explicitly maintained, sourced coordinates under data/ are used.`));
     if (d.locations.problems.length) parts.push(el("details", null, el("summary", null, `Mapping table problems (${d.locations.problems.length})`), el("pre", { class: "raw" }, d.locations.problems.join("\n"))));
     parts.push(el("h3", { style: "margin-top:8px" }, "Fetch log"), el("table", null,
-      el("thead", null, el("tr", null, el("th", null, "Time"), el("th", null, "Feed"), el("th", null, "Result"), el("th", null, "Message"))),
-      el("tbody", null, d.fetch_log.map((l) => el("tr", null, el("td", null, fmt(l.at, true)), el("td", null, l.feed), el("td", null, l.ok ? "OK" : "Failed"), el("td", { class: "small" }, l.message))))));
+      el("thead", null, el("tr", null, el("th", null, "Time"), el("th", null, "Feed"), el("th", null, "Result"), el("th", null, "Stage"), el("th", null, "HTTP"), el("th", null, "Message"))),
+      el("tbody", null, d.fetch_log.map((l) => el("tr", null, el("td", null, fmt(l.at, true)), el("td", null, l.feed), el("td", null, l.ok ? "OK" : "Failed"), el("td", null, l.stage || ""), el("td", null, l.http_status || ""), el("td", { class: "small" }, l.message))))));
     parts.push(el("h3", { style: "margin-top:8px" }, "Saved snapshots"), el("table", null,
       el("thead", null, el("tr", null, el("th", null, "#"), el("th", null, "File"), el("th", null, "File time"), el("th", null, "Fetched"), el("th", null, "Outages"), el("th", null, "Changes"))),
       el("tbody", null, d.snapshots.map((x) => el("tr", null, el("td", null, x.id), el("td", { class: "mono small" }, x.source_file), el("td", null, fmt(x.name_time, true)), el("td", null, fmt(x.fetched_at, true)), el("td", null, x.record_count), el("td", null, x.change_count))))));

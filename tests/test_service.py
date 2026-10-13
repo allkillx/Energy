@@ -89,6 +89,8 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(state["source"]["file"], "PUBLIC_NETWORK_202610120900_02.zip")
         self.assertTrue(state["stale"])
         self.assertIn("simulated network failure", state["last_error"])
+        self.assertEqual(state["last_error_info"]["stage"], "listing")
+        self.assertEqual(state["last_error_info"]["url"], "https://nemweb.test/Network/")
         self.assertTrue(state["outages"])
 
     def test_empty_or_missing_outage_table_is_rejected(self):
@@ -99,6 +101,9 @@ class MonitorTests(unittest.TestCase):
         r = self.monitor.refresh(force=True)["network"]
         self.assertFalse(r["ok"])
         self.assertIn("is empty", r["error"])
+        self.assertEqual(r["stage"], "validate")
+        self.assertTrue(r["url"].endswith("PUBLIC_NETWORK_202610120900_02.zip"))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "raw", "REJECTED_PUBLIC_NETWORK_202610120900_02.zip")))
         self.assertEqual(self.monitor.state()["source"]["file"], "PUBLIC_NETWORK_202610120830_01.zip")
 
     def test_locations_only_use_sourced_coordinates(self):

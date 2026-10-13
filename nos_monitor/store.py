@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
     record_count INTEGER NOT NULL,
     tables_json TEXT NOT NULL,          -- {table: {version, rows, columns}}
     warnings_json TEXT NOT NULL,
-    records_z BLOB NOT NULL             -- zlib(JSON list of outage records)
+    records_z BLOB NOT NULL,            -- zlib(JSON list of outage records)
+    validation_json TEXT                -- validate.validate() report
 );
 CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +38,10 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     feed TEXT NOT NULL,                 -- network | dispatch
     ok INTEGER NOT NULL,
     message TEXT,
-    source_file TEXT
+    source_file TEXT,
+    url TEXT,
+    http_status INTEGER,
+    stage TEXT                          -- listing | download | parse | validate
 );
 CREATE TABLE IF NOT EXISTS market (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,7 +70,16 @@ class Store:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        # columns added after the first release
+        self._ensure_column("snapshots", "validation_json", "TEXT")
+        for col, typ in (("url", "TEXT"), ("http_status", "INTEGER"), ("stage", "TEXT")):
+            self._ensure_column("fetch_log", col, typ)
         self._conn.commit()
+
+    def _ensure_column(self, table: str, column: str, typ: str):
+        cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
 
     def close(self):
         self._conn.close()
@@ -86,6 +99,7 @@ class Store:
         snap = {k: row[k] for k in row.keys() if k != "records_z"}
         snap["tables"] = json.loads(snap.pop("tables_json"))
         snap["warnings"] = json.loads(snap.pop("warnings_json"))
+        snap["validation"] = json.loads(snap.pop("validation_json") or "null")
         if with_records:
             snap["records"] = json.loads(zlib.decompress(row["records_z"]).decode())
         return snap
@@ -101,12 +115,13 @@ class Store:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 """INSERT INTO snapshots (source_file, source_url, source_kind, name_time, listing_time,
-                   report_time, fetched_at, record_count, tables_json, warnings_json, records_z)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                   report_time, fetched_at, record_count, tables_json, warnings_json, records_z, validation_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     meta["source_file"], meta.get("source_url"), meta["source_kind"], meta.get("name_time"),
                     meta.get("listing_time"), meta.get("report_time"), meta["fetched_at"], len(records),
                     json.dumps(meta.get("tables", {})), json.dumps(meta.get("warnings", [])[:200]), blob,
+                    json.dumps(meta.get("validation")),
                 ),
             )
             sid = cur.lastrowid
@@ -153,11 +168,12 @@ class Store:
         return [dict(r) for r in rows]
 
     # --- fetch log -------------------------------------------------------
-    def log(self, at: str, feed: str, ok: bool, message: str = "", source_file: str | None = None):
+    def log(self, at: str, feed: str, ok: bool, message: str = "", source_file: str | None = None,
+            url: str | None = None, http_status: int | None = None, stage: str | None = None):
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT INTO fetch_log (at, feed, ok, message, source_file) VALUES (?,?,?,?,?)",
-                (at, feed, int(ok), message, source_file),
+                "INSERT INTO fetch_log (at, feed, ok, message, source_file, url, http_status, stage) VALUES (?,?,?,?,?,?,?,?)",
+                (at, feed, int(ok), message, source_file, url, http_status, stage),
             )
             self._conn.execute(
                 "DELETE FROM fetch_log WHERE id NOT IN (SELECT id FROM fetch_log ORDER BY id DESC LIMIT ?)", (KEEP_LOG,)
