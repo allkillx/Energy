@@ -1,0 +1,4 @@
+# runtime data: SQLite snapshots, downloaded raw zips, demo output
+var/
+__pycache__/
+*.pyc

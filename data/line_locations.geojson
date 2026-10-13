@@ -1,0 +1,5 @@
+{
+  "type": "FeatureCollection",
+  "_comment": "Transmission line geometries. Each feature needs properties.substation_id, properties.equipment_id (as in NETWORK_OUTAGEDETAIL) and properties.source (citable dataset). Empty until populated from a trusted source.",
+  "features": []
+}

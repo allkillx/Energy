@@ -1,0 +1,11 @@
+{
+  "type": "FeatureCollection",
+  "_comment": "DEMO ONLY. Synthetic geometry between two synthetic DEMO substations. Not a real line; loaded only by `python -m nos_monitor demo`.",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"substation_id": "DEMO_NSW_A", "equipment_id": "DEMO_L1", "name": "Demo line L1", "source": "DEMO synthetic geometry"},
+      "geometry": {"type": "LineString", "coordinates": [[150.20, -33.40], [151.40, -32.30]]}
+    }
+  ]
+}

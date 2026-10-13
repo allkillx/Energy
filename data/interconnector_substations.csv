@@ -1,0 +1,3 @@
+# Substations (AEMO SUBSTATIONID) that terminate an interconnector. Maintain explicitly; do not guess.
+# interconnector_id must match the IDs AEMO uses in DISPATCH_INTERCONNECTORRES, e.g. NSW1-QLD1, N-Q-MNSP1, VIC1-NSW1, V-SA, V-S-MNSP1, T-V-MNSP1.
+interconnector_id,substation_id,source,notes

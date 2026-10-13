@@ -1,0 +1,11 @@
+# DEMO ONLY. Synthetic coordinates for the synthetic DEMO_* substations used by `python -m nos_monitor demo`.
+# These are NOT real substation locations and are never loaded outside demo mode.
+substation_id,name,latitude,longitude,source,source_ref,notes
+DEMO_NSW_A,Demo NSW substation A,-33.40,150.20,DEMO synthetic coordinate,not real,demo only
+DEMO_NSW_B,Demo NSW substation B,-32.30,151.40,DEMO synthetic coordinate,not real,demo only
+DEMO_QLD_A,Demo QLD substation A,-27.30,152.40,DEMO synthetic coordinate,not real,demo only
+DEMO_QLD_B,Demo QLD substation B,-23.50,150.50,DEMO synthetic coordinate,not real,demo only
+DEMO_VIC_A,Demo VIC substation A,-37.70,145.00,DEMO synthetic coordinate,not real,demo only
+DEMO_VIC_B,Demo VIC substation B,-36.50,143.80,DEMO synthetic coordinate,not real,demo only
+DEMO_SA_A,Demo SA substation A,-34.80,138.70,DEMO synthetic coordinate,not real,demo only
+DEMO_TAS_A,Demo TAS substation A,-42.30,147.20,DEMO synthetic coordinate,not real,demo only
