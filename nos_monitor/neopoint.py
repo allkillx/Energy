@@ -21,7 +21,7 @@ is filled from NEOPOINT_INSTANCES_<FEED> (comma-separated, one request each).
 Link structure seen in a user-supplied (key-redacted) link, 2026-10-13:
     https://neopoint.com.au/Service/Csv?f=106%20Flows%20and%20Constraints%5CNOS%20Planned%20Outages%20by%20Region
         &from=2026-10-12%2000%3A00&period=Daily&instances=NSW1&section=-1&key=<redacted>
-i.e. f=<category>\<report>, from, period, instances (one region), section, key.
+i.e. f=<category>\\<report>, from, period, instances (one region), section, key.
 """
 
 from __future__ import annotations
