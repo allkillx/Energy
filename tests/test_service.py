@@ -7,6 +7,7 @@ import threading
 import unittest
 import urllib.request
 import zipfile
+from datetime import timedelta
 from http.server import ThreadingHTTPServer
 
 from nos_monitor import sample
@@ -16,6 +17,7 @@ from nos_monitor.mms_csv import parse_text
 from nos_monitor.server import make_handler
 from nos_monitor.service import Monitor
 from nos_monitor.store import Store
+from nos_monitor.timeutil import parse_nem
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -118,9 +120,15 @@ class MonitorTests(unittest.TestCase):
     def test_market_observation_without_membership_is_unconfirmed(self):
         market = summarise_dispatch(parse_text(sample.dispatch_csv()[1]))
         self.assertEqual(market["binding_constraints"][0]["constraint_id"], "DEMO_N>>L1_A")
-        rec = {"constraint_sets": [{"id": "DEMO-N-SET1"}, {"id": "UNKNOWN"}], "regions": ["NSW1"]}
+        sd = parse_nem(market["settlement_date"])
+        window = {"start": (sd - timedelta(hours=1)).isoformat(), "end": (sd + timedelta(hours=1)).isoformat()}
+        rec = {"constraint_sets": [{"id": "DEMO-N-SET1"}, {"id": "UNKNOWN"}], "regions": ["NSW1"], **window}
         obs = observe_outage(rec, market, {"DEMO-N-SET1": ["DEMO_N>>L1_A"]})
         self.assertEqual([c["status"] for c in obs["constraint_sets"]], ["binding", "unknown"])
+        # The same binding set must not be attached to an outage that already ended (shared constraint sets).
+        ended = dict(rec, start=(sd - timedelta(days=2)).isoformat(), end=(sd - timedelta(days=1)).isoformat())
+        obs = observe_outage(ended, market, {"DEMO-N-SET1": ["DEMO_N>>L1_A"]})
+        self.assertEqual([c["status"] for c in obs["constraint_sets"]], ["not_evaluated", "not_evaluated"])
         self.assertIn("NSW1-QLD1", obs["interconnectors"])
         self.assertFalse(observe_outage(rec, None, {})["available"])
 

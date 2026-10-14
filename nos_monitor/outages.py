@@ -40,7 +40,8 @@ EQUIPMENT_TYPE_LABELS = {
     "LOAD": "Load",
 }
 
-_CANCELLED_RE = re.compile(r"CANCEL|WITHDRAW|REJECT|DELET|RECALLED", re.IGNORECASE)
+# "WDRAWN = Withdrawn" is final; "WD REQ = Withdraw Request" is only a request and is not treated as cancelled.
+_CANCELLED_RE = re.compile(r"\bWITHDRAWN\b|\bWDRAWN\b|CANCEL|REJECT", re.IGNORECASE)
 
 
 def _get(row: dict, *names: str) -> str:
