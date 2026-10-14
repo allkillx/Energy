@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import timedelta
 
-from . import mms_csv, nemweb, neopoint, neopoint_nos
+from . import mms_csv, nemweb, neopoint, neopoint_nos, reference
 from .diff import diff_snapshots
 from .locations import Locations
 from .market import adjacent_interconnectors, observe_outage, summarise_dispatch
@@ -47,6 +47,7 @@ class Monitor:
         self.getter, self.network_url, self.dispatch_url = getter, network_url, dispatch_url
         self.enable_network, self.enable_market = enable_network, enable_market
         self.source = source  # "nemweb" (AEMO PUBLIC_NETWORK) or "neopoint" (NOS Planned Outages by Region)
+        self.reference = reference.Reference(var_dir, getter)
         self._lock = threading.Lock()
         self._last_refresh = 0.0
         os.makedirs(os.path.join(var_dir, "raw"), exist_ok=True)
@@ -54,6 +55,8 @@ class Monitor:
     # --- ingest ----------------------------------------------------------
     def ingest_network(self, mms: mms_csv.MmsFile, meta: dict, raw_rows: dict | None = None) -> dict:
         now = now_nem()
+        # The live PUBLIC_NETWORK file has no region/description tables; add them from AEMO's monthly archive.
+        from_reference = reference.merge_lookups(mms, self.reference.lookup_tables())
         report = validate(mms, now)
         if not report["ok"]:
             raise ValidationError(report)
@@ -70,6 +73,10 @@ class Monitor:
                           for n, t in mms.tables.items()}
         meta["warnings"] = mms.warnings
         meta["validation"] = report
+        if from_reference:
+            info = dict(meta.get("source_info") or {})
+            info["reference"] = {"label": self.reference.label(), "tables": from_reference}
+            meta["source_info"] = info
         sid = self.store.add_snapshot(meta, records, changes, prev["id"] if prev else None)
         return {"snapshot_id": sid, "records": len(records), "changes": len(changes)}
 
@@ -81,6 +88,21 @@ class Monitor:
                                         "name_time": iso(nt)})
         self.store.log(iso(now_nem()), "network", True, f"imported {name}: {res['records']} outages, {res['changes']} changes", name)
         return res
+
+    def refresh_reference(self) -> dict:
+        """Update AEMO monthly reference tables and constraint-set membership. Failure is logged, never fatal."""
+        at = iso(now_nem())
+        try:
+            meta = self.reference.refresh()
+            pairs = self.reference.genconset_pairs()
+            if pairs:
+                self.store.replace_genconset(pairs, self.reference.label())
+            msg = f"reference tables {meta['newest_month']}; {len({a for a, _ in pairs})} constraint sets with members"
+            self.store.log(at, "reference", True, msg, url=reference.ARCHIVE_ROOT)
+            return {"ok": True, "month": meta["newest_month"], "constraint_sets": len({a for a, _ in pairs})}
+        except nemweb.FetchError as exc:
+            self.store.log(at, "reference", False, str(exc), url=exc.url, http_status=exc.status, stage=exc.stage)
+            return {"ok": False, "error": str(exc)}
 
     def ingest_neopoint_rows(self, rows: list[dict], kind: str, urls: list[str] | None = None,
                              files: list[str] | None = None) -> dict:
@@ -163,6 +185,8 @@ class Monitor:
                 return {"skipped": f"last check was less than {MIN_REFRESH_GAP_SECONDS}s ago"}
             self._last_refresh = time.monotonic()
             out = {}
+            if self.enable_network and self.source == "nemweb" and self.reference.is_stale():
+                out["reference"] = self.refresh_reference()
             if self.enable_network and self.source == "neopoint":
                 out["network"] = self._refresh_neopoint()
             elif self.enable_network:

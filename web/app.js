@@ -338,7 +338,7 @@
   const BOX = { QLD1: [250, 10], NSW1: [250, 110], VIC1: [250, 210], SA1: [10, 210], TAS1: [250, 320] };
   const ICS = [
     ["NSW1-QLD1", "NSW1", "QLD1", -28], ["N-Q-MNSP1", "NSW1", "QLD1", 28],
-    ["VIC1-NSW1", "VIC1", "NSW1", 0], ["V-SA", "VIC1", "SA1", -12], ["V-S-MNSP1", "VIC1", "SA1", 12], ["T-V-MNSP1", "TAS1", "VIC1", 0],
+    ["VIC1-NSW1", "VIC1", "NSW1", 0], ["V-SA", "VIC1", "SA1", -12], ["V-S-MNSP1", "VIC1", "SA1", 12], ["T-V-MNSP1", "TAS1", "VIC1", 0], ["NSW1-SA1", "NSW1", "SA1", 0],
   ];
   function renderSchematic(rows) {
     const NS = "http://www.w3.org/2000/svg";
@@ -457,7 +457,8 @@
       if (!mk.constraint_sets.length) market.append(el("p", { class: "muted" }, "No linked constraint sets."));
       market.append(...mk.constraint_sets.map((c) => el("div", null,
         el("span", { class: "mono" }, c.id), ": ",
-        c.status === "unknown" ? el("span", { class: "tag unmapped" }, "Cannot be confirmed") : c.status === "binding"
+        c.status === "not_evaluated" ? el("span", { class: "tag" }, "Not evaluated (outage not active in this interval)")
+          : c.status === "unknown" ? el("span", { class: "tag unmapped" }, "Cannot be confirmed") : c.status === "binding"
           ? el("span", null, el("span", { class: "tag attention" }, "Member constraint binding"), " ", c.binding.map((b) => `${b.constraint_id} (MV ${b.marginal_value})`).join(", "))
           : el("span", { class: "tag" }, `No member constraint binding (${c.members} members)`),
         c.note ? el("div", { class: "hint" }, c.note) : null)));

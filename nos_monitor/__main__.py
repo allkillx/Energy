@@ -81,6 +81,11 @@ def cmd_fetch_latest(args):
     print(f"{entry.name}  listing={entry.listing_time}  name_time={entry.name_time}\nsaved {path}")
 
 
+def cmd_refresh_reference(args):
+    m = _monitor(args)
+    print(json.dumps(m.refresh_reference(), ensure_ascii=False, indent=2))
+
+
 def cmd_validate(args):
     report = validate(mms_csv.parse_file(args.file))
     print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else format_report(report))
@@ -276,6 +281,9 @@ def main(argv=None):
     s.add_argument("--out", default=os.path.join(ROOT, "var", "downloads"))
     s.add_argument("--dispatch", action="store_true")
     s.set_defaults(func=cmd_fetch_latest)
+
+    s = sub.add_parser("refresh-reference", help="download AEMO monthly reference tables (regions, status, GENCONSET)")
+    s.set_defaults(func=cmd_refresh_reference)
 
     s = sub.add_parser("validate", help="check that outage/status/constraint-set fields can be read from a file")
     s.add_argument("file")

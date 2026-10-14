@@ -7,6 +7,8 @@ outage caused a constraint to bind or a price spread to open.
 from __future__ import annotations
 
 from .mms_csv import MmsFile
+from .outages import phase
+from .timeutil import parse_nem
 
 # Interconnector -> (from region, to region), positive flow direction per AEMO convention.
 INTERCONNECTOR_REGIONS = {
@@ -16,6 +18,7 @@ INTERCONNECTOR_REGIONS = {
     "V-SA": ("VIC1", "SA1"),
     "V-S-MNSP1": ("VIC1", "SA1"),
     "T-V-MNSP1": ("TAS1", "VIC1"),
+    "NSW1-SA1": ("NSW1", "SA1"),  # Project EnergyConnect; seen in live DISPATCH_INTERCONNECTORRES 2026-10-14
 }
 
 REGION_PAIRS = [("QLD1", "NSW1"), ("NSW1", "VIC1"), ("VIC1", "SA1"), ("TAS1", "VIC1")]
@@ -93,10 +96,17 @@ def observe_outage(rec: dict, market: dict | None, members: dict[str, list[str]]
     if not market:
         return {"available": False, "note": "Cannot be confirmed yet: no public DispatchIS data has been retrieved."}
     binding_ids = {b["constraint_id"]: b for b in market.get("binding_constraints", [])}
+    interval = parse_nem(market.get("settlement_date"))
+    # A constraint set is often shared by several outages; binding is only reported for an outage that is
+    # active in the dispatch interval itself, otherwise it would attach to outages that ended or have not started.
+    in_window = interval is not None and phase(rec, interval)[0] == "active"
     sets = []
     for cs in rec.get("constraint_sets", []):
         m = members.get(cs["id"])
-        if m is None:
+        if not in_window:
+            sets.append({"id": cs["id"], "status": "not_evaluated",
+                         "note": "Not evaluated: this outage is not active in the dispatch interval."})
+        elif m is None:
             sets.append({"id": cs["id"], "status": "unknown",
                          "note": "Cannot be confirmed: no member mapping (GENCONSET) for this constraint set."})
         else:

@@ -54,53 +54,51 @@ Tests:
 python -m unittest discover -s tests -v
 ```
 
-## Verification status (2026-10-13)
+## Verification status (2026-10-14)
 
-| Item | Verified with a real AEMO file? | How it is tested now |
+Network access to NEMweb and NEOpoint became available on 2026-10-14, and everything below was run against live data.
+
+| Item | Verified with real data? | Evidence |
 |---|---|---|
-| Finding the newest `PUBLIC_NETWORK_*.zip` in the NEMweb listing | **No** | Hand-written listing fixture in the common IIS format |
-| Downloading the zip | **No** | Fake HTTP getter |
-| Reading `NETWORK_OUTAGEDETAIL` (outage ID, equipment, times, status code) | **No** | Synthetic MMS CSV |
-| Resolving status codes via `NETWORK_OUTAGESTATUSCODE` | **No** | Synthetic MMS CSV |
-| Reading `NETWORK_OUTAGECONSTRAINTSET` and joining it to outages | **No** | Synthetic MMS CSV |
-| DispatchIS market observations | **No** | Synthetic MMS CSV |
-| Failure handling (URL, HTTP status, stage recorded; last good data kept) | **Yes, against the real failure** | Live run below, plus unit tests |
-| NEOpoint NOS report: outage, status, times, substation, equipment, constraint set fields | **Yes, one real NEOpoint export** (NSW1, 2026-10-12) | `tests/test_neopoint_nos.py`; see "NEOpoint data source" |
-| NEOpoint live fetch, other NEOpoint feeds | **No** | Proxy refuses neopoint.com.au; no samples for the other feeds |
+| Finding the newest `PUBLIC_NETWORK_*.zip` in the NEMweb listing | **Yes** | Live run; picked `PUBLIC_NETWORK_20261014123018_…zip` |
+| Downloading and parsing it | **Yes** | Saved as `tests/fixtures/real/`; `RealFileTests` runs on it |
+| `NETWORK_OUTAGEDETAIL` (v4) and `NETWORK_OUTAGECONSTRAINTSET` (v1) | **Yes** | 12,383 rows / 5,695 outages; 946 constraint-set rows, all joined to an outage |
+| Regions, status descriptions, equipment descriptions | **Yes, via AEMO's monthly archive** | Not in the live file (see below); 516 of 559 outage substation IDs resolve to a region, and all 12 status codes have descriptions |
+| Constraint set → constraint membership (GENCONSET) | **Partly** | Last 12 monthly archives give 4,770 sets; sets not changed in that period stay "Cannot be confirmed" |
+| DispatchIS market observations | **Yes** | Live run: 27 binding constraints, region prices, interconnector flows (including `NSW1-SA1`) |
+| NEOpoint NOS live fetch | **Yes** (NSW1) | Live response saved as `tests/fixtures/neopoint/neopoint_nos_outages_NSW1_2026-10-14T1239.csv`; same 20 columns |
+| Page with live AEMO data | **Yes** | Checked in Chromium: list, filters, search, details, map notice; no JS errors |
+| Other NEOpoint feeds, coordinates | **No** | No samples; coordinate tables still empty |
 
-Live attempt from the development environment on 2026-10-13:
+### What the real AEMO data showed
 
-```
-$ python -m nos_monitor diagnose --save-fixture tests/fixtures/real
-[listing] ok=False, url=https://nemweb.com.au/Reports/Current/Network/, http_status=403, via_proxy=True,
-          detail=Tunnel connection failed: 403 Forbidden
-$ python -m nos_monitor diagnose --dispatch
-[listing] ok=False, url=https://nemweb.com.au/Reports/Current/DispatchIS_Reports/, http_status=403, via_proxy=True, ...
-```
+- **The live `PUBLIC_NETWORK` file carries only two tables**: `NETWORK_OUTAGEDETAIL` and `NETWORK_OUTAGECONSTRAINTSET`.
+  - Substation regions, status descriptions and equipment descriptions are not in it.
+  - The tool fetches them from AEMO's MMS Data Model monthly archive (`Data_Archive/Wholesale_Electricity/MMSDM/<year>/MMSDM_<year>_<month>/…/DATA/`). The newest month is found from the directory listing.
+  - The tables are cached under `var/reference/` and refreshed weekly (`python -m nos_monitor refresh-reference`). The current snapshot's diagnostics name the archive month used.
+- **Timestamps** in the live file and the archive carry milliseconds (`2011/01/28 10:29:12.250`).
+- **Status codes seen**: `SUBMIT`, `WDRAWN` (Withdrawn), `MTLTP`, `COMPLETE`, `RESUBMIT`, `PTP`, `INFO`, `STLTP`, `WD REQ` (Withdraw Request), `PDLTP`, `PTR`. Only `WDRAWN` counts as cancelled; `WD REQ` is a request, not a withdrawal.
+- **Unresolved substation IDs**: the 43 IDs with no region are mostly line-section codes (`275KV_813`, `6C`, `N/A`) plus sites newer than the archive month. They show as region "Unknown".
+- **Placeholder dates**: withdrawn records can carry dates in year 2100 or later.
+- **Shared constraint sets**: one constraint set is often linked to several outages. Binding status is therefore only evaluated for an outage that is active in the dispatch interval; for any other outage it shows "Not evaluated".
 
-The 403 comes from the environment's egress proxy refusing `CONNECT nemweb.com.au:443` (organisation network policy), not from AEMO. The listing was never received, so no file could be downloaded, parsed or saved as a fixture. `www.aemo.com.au`, Geoscience Australia (`services.ga.gov.au`, `digital.atlas.gov.au`), `data.gov.au` and OpenStreetMap were refused the same way.
-
-To complete verification on a machine that can reach NEMweb:
-
-1. Run `python -m nos_monitor diagnose --save-fixture tests/fixtures/real --import`. It prints each step and the field validation report: outage rows and IDs, status codes used and any without a description, constraint set rows and how many join to an outage, and substations without a region. It exits non-zero on any failure.
-2. Run `python -m unittest discover -s tests`. `RealFileTests` validates every zip in `tests/fixtures/real/` (it is skipped while that folder is empty).
-3. If validation reports missing columns, adjust the column names in `nos_monitor/outages.py` and `nos_monitor/validate.py`.
+The live check that failed on 2026-10-13 (proxy 403) is recorded in git history.
 
 ## NEOpoint data source
 
 The page can take outages from NEOpoint instead of NEMweb (`serve --source neopoint`). NEOpoint needs an API key.
 
-### Status (2026-10-13)
+### Status (2026-10-14)
 
 | Feed | NEOpoint report | Status |
 |---|---|---|
-| Outages | 106 Flows and Constraints\NOS Planned Outages by Region | **Mapped and verified against one real export** (NSW1, `from=2026-10-12`, Daily): `tests/fixtures/neopoint/` |
+| Outages | 106 Flows and Constraints\NOS Planned Outages by Region | **Mapped and verified** against a user export (NSW1, 2026-10-12) and a live fetch (NSW1, 2026-10-14): `tests/fixtures/neopoint/` |
 | Constraints | Constraints and sets | Not available: no real sample or link yet, so no mapping. Dispatch interval / marginal value / violation degree unconfirmed |
 | Interconnectors | Interconnectors | Not available: no real sample or link yet |
 | DUID prices | Local Price by DUID (GULLRWF1, GULLRWF2) | Not available: no real sample or link yet |
 | Region prices | Local Price by Region (NSW1, QLD1, VIC1) | Not available: no real sample or link yet |
 
-Live fetching from NEOpoint has **not** been verified: the development environment's proxy refuses `CONNECT neopoint.com.au:443` (HTTP 403). The verified sample was a CSV downloaded by the user.
+Live fetching from NEOpoint was verified on 2026-10-14 for NSW1. The response had the same 20 columns as the first export the user downloaded.
 
 ### What the real NOS export contains
 
@@ -283,6 +281,7 @@ nos_monitor/
   mms_csv.py    generic MMS CSV (C/I/D rows) parser, zip support
   nemweb.py     directory listing parsing, dynamic latest-file selection, download, FetchError (URL/status/stage)
   validate.py   field-level validation of outage/status/constraint-set data
+  reference.py  AEMO MMSDM monthly archive: regions, status/equipment descriptions, GENCONSET membership
   ga_import.py  Geoscience Australia candidate suggestions + applying human-confirmed rows
   neopoint.py   NEOpoint: .env loading, server-side fetch, key redaction, CSV inspection
   neopoint_nos.py  NEOpoint "NOS Planned Outages by Region" CSV -> NETWORK_* shapes (verified columns)
@@ -302,7 +301,7 @@ tests/          unittest; tests/fixtures/real/ holds real AEMO files (currently 
 
 ## Known limitations
 
-- Nothing has been verified against a real AEMO file yet. Only the NEOpoint NOS report has been checked, against one real export. See "Verification status" above.
+- Constraint set membership covers only sets that changed in the last 12 monthly archives; the rest show "Cannot be confirmed". See "Verification status" above.
 - Directory listing parsing follows the common NEMweb (IIS) listing format. The test fixture `tests/fixtures/network_listing.html` was hand-written in that format, not copied from the real page.
 - The coordinate tables are empty, so with real data every outage shows "Location unmapped" for now.
 - Interconnector impact is shown in only two ways: the hand-maintained terminal substation mapping, and region adjacency. The tool never infers causality from constraint names or price moves.
