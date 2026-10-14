@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NEM Outage Monitor</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="demo-banner" class="banner demo" hidden>Demo mode: all data on this page is synthetic (DEMO_*) with demo coordinates. None of it is real AEMO data.</div>
+<header class="top">
+  <div class="title">
+    <h1>NEM Transmission Outage Monitor</h1>
+    <span class="sub">Network Outage Schedule · public NEMweb data</span>
+  </div>
+  <div class="controls">
+    <button id="btn-refresh" class="primary" type="button">Refresh now</button>
+    <label class="inline">Auto check
+      <select id="sel-interval">
+        <option value="0">Off</option>
+        <option value="60">1 min</option>
+        <option value="120">2 min</option>
+        <option value="300">5 min</option>
+        <option value="600">10 min</option>
+        <option value="900">15 min</option>
+        <option value="1800">30 min</option>
+      </select>
+    </label>
+    <span id="next-check" class="muted small"></span>
+  </div>
+</header>
+
+<section id="status" class="status-strip" aria-live="polite">
+  <div class="stat"><span class="k">Data status</span><span id="st-badge" class="badge">Loading</span></div>
+  <div class="stat"><span class="k">Source file</span><span id="st-file" class="v mono">—</span></div>
+  <div class="stat"><span class="k" id="st-upstream-label">Upstream file published</span><span id="st-upstream" class="v">—</span></div>
+  <div class="stat"><span class="k">Local fetch time</span><span id="st-fetched" class="v">—</span></div>
+  <div class="stat"><span class="k">Last check</span><span id="st-check" class="v">—</span></div>
+  <div class="stat"><span class="k">Market data (DispatchIS)</span><span id="st-market" class="v">—</span></div>
+  <p class="note small muted" id="st-note">NOS files are published upstream roughly every 30 minutes. "Auto check" is only how often this page checks for a new file; it is not the upstream update frequency. All times are NEM time (AEST, UTC+10).</p>
+  <div id="st-error" class="error" hidden></div>
+  <div id="st-stale" class="warn" hidden></div>
+</section>
+
+<section class="kpis" id="kpis"></section>
+
+<section class="filters" aria-label="Filters">
+  <div class="group" id="f-regions" role="group" aria-label="Regions"></div>
+  <div class="group" id="f-phases" role="group" aria-label="Status"></div>
+  <label class="inline">Window
+    <select id="f-window">
+      <option value="24">Next 24 h</option>
+      <option value="72">Next 72 h</option>
+      <option value="168" selected>Next 7 days</option>
+      <option value="720">Next 30 days</option>
+      <option value="0">All</option>
+    </select>
+  </label>
+  <label class="inline"><input type="checkbox" id="f-attention"> Needs attention only</label>
+  <label class="inline"><input type="checkbox" id="f-conset"> With constraint sets only</label>
+  <label class="inline"><input type="checkbox" id="f-unmapped"> Unmapped only</label>
+  <input type="search" id="f-search" placeholder="Search ID / substation / equipment / constraint set" aria-label="Search">
+</section>
+
+<main class="layout">
+  <section class="panel list-panel">
+    <div class="panel-head"><h2>Outages</h2><span id="list-count" class="muted small"></span></div>
+    <div class="table-wrap">
+      <table id="outage-table">
+        <thead><tr>
+          <th></th><th>Outage ID</th><th>Region</th><th>Substation</th><th>Equipment</th><th>Status</th><th>Start</th><th>End</th><th>Con. sets</th><th>Flags</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="list-empty" class="muted" hidden>No outages match the current filters.</p>
+    </div>
+  </section>
+
+  <section class="panel map-panel">
+    <div class="panel-head"><h2>Map</h2><span id="map-note" class="muted small"></span></div>
+    <div id="map"></div>
+    <div class="panel-head"><h3>Regions and interconnectors (schematic, not geographic)</h3></div>
+    <div id="schematic"></div>
+    <p class="small muted">Region shading reflects the number of active/upcoming outages under the current filters. Interconnector labels show the latest DispatchIS flow (MW). Solid highlight = the selected outage's substation is in the interconnector mapping table; dashed = the interconnector merely borders the outage's region, not a confirmed impact.</p>
+  </section>
+</main>
+
+<section class="panel detail-panel" id="detail">
+  <div class="panel-head"><h2>Outage details</h2><button type="button" id="btn-close-detail" class="ghost" hidden>Close</button></div>
+  <div id="detail-body" class="muted">Select an outage in the list or on the map.</div>
+</section>
+
+<section class="panel changes-panel">
+  <div class="panel-head"><h2>Recent data changes</h2><span class="muted small">Consecutive snapshot comparison</span></div>
+  <div class="group" id="f-change-kinds"></div>
+  <div id="changes"></div>
+</section>
+
+<section class="panel meta-panel">
+  <div class="panel-head"><h2>Data sources and diagnostics</h2></div>
+  <div id="meta"></div>
+</section>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# runtime data: SQLite snapshots, downloaded raw zips, demo output
+var/
+__pycache__/
+*.pyc
+# secrets: NEOpoint API key and report links live here, never in git
+.env
+.env.*
+!.env.example

@@ -1,0 +1,5 @@
+# AEMO SUBSTATIONID -> coordinate. Only add rows whose coordinate comes from a citable source
+# (e.g. Geoscience Australia "Electricity Transmission Substations" dataset, TNSP published maps).
+# Rows without `source`, or with coordinates outside Australia, are ignored and reported in the page.
+# Use `python -m nos_monitor locations-template` to list substation IDs seen in the data that still lack coordinates.
+substation_id,name,latitude,longitude,source,source_ref,notes
